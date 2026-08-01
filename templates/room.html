@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ROOM {{ room_code }} | OW BAN ROOM</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">OW <span>BAN ROOM</span></a>
+    <div class="room-code-wrap">
+      <span>ROOM</span>
+      <strong id="room-code">{{ room_code }}</strong>
+      <button id="copy-link" class="icon-button" type="button">招待URLをコピー</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section id="connection-message" class="notice" hidden></section>
+
+    <section id="join-card" class="join-card" hidden>
+      <div>
+        <p class="section-label">JOIN ROOM</p>
+        <h1>参加者情報を入力</h1>
+        <p>名前と所属チームを選んでください。各チーム5人までです。</p>
+      </div>
+      <form id="join-form" class="join-form">
+        <label>
+          プレイヤー名
+          <input id="player-name" maxlength="24" placeholder="プレイヤー名" required>
+        </label>
+        <div class="team-choice">
+          <label><input type="radio" name="team" value="A" required><span>TEAM A</span></label>
+          <label><input type="radio" name="team" value="B" required><span>TEAM B</span></label>
+        </div>
+        <button class="primary-button" type="submit">このルームに参加</button>
+      </form>
+    </section>
+
+    <section id="host-panel" class="host-panel" hidden>
+      <div>
+        <p class="section-label">HOST CONTROL</p>
+        <h2>主催者メニュー</h2>
+      </div>
+      <div class="host-actions">
+        <label class="toggle-row">
+          <input id="auto-reveal" type="checkbox">
+          <span>10人完了で自動公開</span>
+        </label>
+        <label class="toggle-row">
+          <input id="lobby-ban" type="checkbox">
+          <span>5体目のロビーBAN</span>
+        </label>
+        <button id="reveal-button" class="primary-button compact" type="button">結果を公開</button>
+        <button id="reset-button" class="secondary-button compact" type="button">次のラウンド</button>
+      </div>
+    </section>
+
+    <section class="status-row">
+      <div>
+        <span class="status-label">ROUND</span>
+        <strong id="round-number">1</strong>
+      </div>
+      <div>
+        <span class="status-label">STATUS</span>
+        <strong id="room-status">投票中</strong>
+      </div>
+      <div class="progress-block">
+        <span class="status-label">READY</span>
+        <strong><span id="ready-count">0</span> / <span id="player-count">0</span></strong>
+        <div class="progress-track"><div id="progress-bar"></div></div>
+      </div>
+    </section>
+
+    <section class="teams-grid">
+      <article class="team-panel team-a">
+        <div class="team-heading"><h2>TEAM A</h2><span id="team-a-count">0 / 5</span></div>
+        <div id="team-a-list" class="player-list"></div>
+      </article>
+      <article class="team-panel team-b">
+        <div class="team-heading"><h2>TEAM B</h2><span id="team-b-count">0 / 5</span></div>
+        <div id="team-b-list" class="player-list"></div>
+      </article>
+    </section>
+
+    <section id="voting-panel" class="voting-panel" hidden>
+      <div class="vote-header">
+        <div>
+          <p class="section-label">YOUR VOTE</p>
+          <h2><span id="my-team"></span>のBAN候補</h2>
+          <p>ヒーローをクリックした順に7点・5点・3点へ入ります。</p>
+        </div>
+        <button id="leave-button" class="text-button" type="button">ルームから退出</button>
+      </div>
+
+      <div class="choice-slots">
+        <button class="choice-slot" data-slot="0" type="button">
+          <span class="choice-points">7 POINTS</span>
+          <strong>第1候補</strong>
+          <span class="selected-hero">未選択</span>
+        </button>
+        <button class="choice-slot" data-slot="1" type="button">
+          <span class="choice-points">5 POINTS</span>
+          <strong>第2候補</strong>
+          <span class="selected-hero">未選択</span>
+        </button>
+        <button class="choice-slot" data-slot="2" type="button">
+          <span class="choice-points">3 POINTS</span>
+          <strong>第3候補</strong>
+          <span class="selected-hero">未選択</span>
+        </button>
+      </div>
+
+      <div class="hero-toolbar">
+        <input id="hero-search" placeholder="ヒーロー名を検索">
+        <div id="role-filters" class="role-filters">
+          <button class="active" data-role="All" type="button">ALL</button>
+          <button data-role="Tank" type="button">TANK</button>
+          <button data-role="Damage" type="button">DAMAGE</button>
+          <button data-role="Support" type="button">SUPPORT</button>
+        </div>
+      </div>
+      <div id="hero-grid" class="hero-grid"></div>
+
+      <div class="vote-actions">
+        <button id="submit-vote" class="primary-button" type="button">3体を選んで投票確定</button>
+        <button id="pass-vote" class="secondary-button" type="button">今回はパス</button>
+        <button id="edit-vote" class="secondary-button" type="button" hidden>投票を変更</button>
+      </div>
+      <p id="vote-message" class="form-message"></p>
+    </section>
+
+    <section id="spectator-note" class="notice" hidden>
+      主催者として参加中です。上の参加フォームから、主催者自身もプレイヤーとしてTEAM AまたはTEAM Bに参加できます。
+    </section>
+
+    <section id="results-panel" class="results-panel" hidden>
+      <div class="results-heading">
+        <p class="section-label">BAN RESULT</p>
+        <h1>今回のBANヒーロー</h1>
+        <p id="first-team-note"></p>
+      </div>
+      <div id="ban-cards" class="ban-cards"></div>
+      <div class="score-grid">
+        <article>
+          <h3>TEAM A 得票</h3>
+          <div id="score-a" class="score-list"></div>
+        </article>
+        <article>
+          <h3>TEAM B 得票</h3>
+          <div id="score-b" class="score-list"></div>
+        </article>
+      </div>
+      <button id="copy-result" class="secondary-button" type="button">BAN結果をコピー</button>
+    </section>
+
+    <p id="global-error" class="error-message" hidden></p>
+  </main>
+
+  <script>window.ROOM_CODE = {{ room_code|tojson }};</script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="{{ url_for('static', filename='room.js') }}"></script>
+</body>
+</html>

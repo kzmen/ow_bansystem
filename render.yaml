@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ow-ban-room
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 --threads 100 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: OW_BAN_DB
+        value: /tmp/ow_ban.db

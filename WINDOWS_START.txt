@@ -1,0 +1,7 @@
+OW BAN ROOM - Windows startup notes
+
+1. Extract the ZIP first. Do not run it from inside the ZIP.
+2. Double-click START_HERE.bat.
+3. Keep the black window open.
+4. Open http://127.0.0.1:5000 if the browser does not open.
+5. If an error appears, run CHECK_INSTALL.bat and send a screenshot.
