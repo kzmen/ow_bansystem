@@ -10,9 +10,8 @@
   let activeRole = 'All';
   let searchText = '';
   let settingsTimer = null;
-  let refreshPromise = null;
-  let refreshQueued = false;
-  let lastRealtimeEvent = 0;
+  let selectionDirty = false;
+  let lastRoundNo = null;
 
   const $ = (id) => document.getElementById(id);
   const globalError = $('global-error');
@@ -47,44 +46,43 @@
   }
 
   async function refresh() {
-    if (refreshPromise) {
-      refreshQueued = true;
-      return refreshPromise;
-    }
+    try {
+      const data = await api(`/api/rooms/${code}/state`);
+      const roundChanged = lastRoundNo !== null && lastRoundNo !== data.room.round_no;
+      state = data;
+      clearError();
 
-    refreshPromise = (async () => {
-      try {
-        const data = await api(`/api/rooms/${code}/state?_=${Date.now()}`);
-        state = data;
-        clearError();
-        if (data.me) selected = [...data.my_choices];
-        render();
-      } catch (error) {
-        showError(error.message);
-      } finally {
-        refreshPromise = null;
-        if (refreshQueued) {
-          refreshQueued = false;
-          refresh();
-        }
+      // リアルタイム更新で、投票確定前に選んでいる候補を消さない。
+      // 初回表示・ラウンド変更・投票確定時だけサーバーの内容へ同期する。
+      if (!data.me) {
+        selected = [];
+        selectionDirty = false;
+      } else if (roundChanged || data.me.ready || !selectionDirty) {
+        selected = [...data.my_choices];
+        selectionDirty = false;
       }
-    })();
-
-    return refreshPromise;
+      lastRoundNo = data.room.round_no;
+      render();
+    } catch (error) {
+      showError(error.message);
+    }
   }
 
   function render() {
     if (!state) return;
     const { room, players, me, is_host: isHost, result } = state;
-    const ready = players.filter((p) => p.ready).length;
+    const eligiblePlayers = players.filter((p) => ['A', 'B'].includes(p.team));
+    const ready = eligiblePlayers.filter((p) => p.ready).length;
     $('round-number').textContent = room.round_no;
     $('room-status').textContent = room.status === 'revealed' ? '結果公開' : '投票中';
     $('ready-count').textContent = ready;
-    $('player-count').textContent = players.length;
-    $('progress-bar').style.width = `${players.length ? (ready / players.length) * 100 : 0}%`;
+    $('player-count').textContent = eligiblePlayers.length;
+    $('progress-bar').style.width = `${eligiblePlayers.length ? (ready / eligiblePlayers.length) * 100 : 0}%`;
 
+    const teamU = players.filter((p) => p.team === 'U');
     const teamA = players.filter((p) => p.team === 'A');
     const teamB = players.filter((p) => p.team === 'B');
+    renderTeam('U', teamU, isHost);
     renderTeam('A', teamA, isHost);
     renderTeam('B', teamB, isHost);
 
@@ -95,11 +93,13 @@
     $('reveal-button').hidden = room.status === 'revealed';
     $('reset-button').hidden = room.status !== 'revealed';
 
-    $('voting-panel').hidden = !me || room.status === 'revealed';
+    const canVote = Boolean(me && ['A', 'B'].includes(me.team));
+    $('voting-panel').hidden = !canVote || room.status === 'revealed';
+    $('unassigned-note').hidden = !(me && me.team === 'U' && room.status === 'voting');
     $('spectator-note').hidden = !(isHost && !me && room.status === 'voting');
     $('results-panel').hidden = room.status !== 'revealed';
 
-    if (me && room.status === 'voting') {
+    if (canVote && room.status === 'voting') {
       $('my-team').textContent = `TEAM ${me.team}`;
       renderChoices();
       renderHeroes();
@@ -117,26 +117,42 @@
   }
 
   function renderTeam(team, players, isHost) {
-    $(`team-${team.toLowerCase()}-count`).textContent = `${players.length} / 5`;
+    const count = $(`team-${team.toLowerCase()}-count`);
+    count.textContent = team === 'U' ? String(players.length) : `${players.length} / 5`;
     const container = $(`team-${team.toLowerCase()}-list`);
     container.innerHTML = '';
     players.forEach((player) => {
       const row = document.createElement('div');
       row.className = `player-row ${player.ready ? 'ready' : ''}`;
+      const status = player.team === 'U' ? '待機中' : (player.ready ? '投票済み' : '未投票');
+      const hostControls = isHost ? `
+        <div class="player-controls">
+          <button class="move-button ${player.team === 'U' ? 'active' : ''}" data-player-id="${player.id}" data-team="U" type="button">未所属</button>
+          <button class="move-button ${player.team === 'A' ? 'active' : ''}" data-player-id="${player.id}" data-team="A" type="button">A</button>
+          <button class="move-button ${player.team === 'B' ? 'active' : ''}" data-player-id="${player.id}" data-team="B" type="button">B</button>
+          <button class="kick-button" data-player-id="${player.id}" type="button">退出</button>
+        </div>` : `<span class="ready-chip">${status}</span>`;
       row.innerHTML = `
         <div class="player-name"><strong>${escapeHtml(player.name)}</strong></div>
-        <div>
-          <span class="ready-chip">${player.ready ? '投票済み' : '未投票'}</span>
-          ${isHost ? `<button class="kick-button" data-player-id="${player.id}" type="button">退出</button>` : ''}
-        </div>`;
+        ${hostControls}`;
       container.appendChild(row);
     });
-    for (let i = players.length; i < 5; i += 1) {
+    if (team !== 'U') {
+      for (let i = players.length; i < 5; i += 1) {
+        const empty = document.createElement('div');
+        empty.className = 'player-row empty';
+        empty.textContent = '空きスロット';
+        container.appendChild(empty);
+      }
+    } else if (!players.length) {
       const empty = document.createElement('div');
       empty.className = 'player-row empty';
-      empty.textContent = '空きスロット';
+      empty.textContent = '待機中の参加者はいません';
       container.appendChild(empty);
     }
+    container.querySelectorAll('.move-button').forEach((button) => {
+      button.addEventListener('click', () => movePlayer(button.dataset.playerId, button.dataset.team));
+    });
     container.querySelectorAll('.kick-button').forEach((button) => {
       button.addEventListener('click', () => kickPlayer(button.dataset.playerId));
     });
@@ -177,6 +193,7 @@
     if (index >= 0) selected.splice(index, 1);
     else if (selected.length < 3) selected.push(hero);
     else $('vote-message').textContent = 'すでに3体選択しています。先に候補を外してください。';
+    selectionDirty = true;
     renderChoices();
     renderHeroes();
   }
@@ -221,6 +238,16 @@
     }[char]));
   }
 
+  async function movePlayer(playerId, team) {
+    try {
+      await api(`/api/rooms/${code}/move`, {
+        method: 'POST',
+        body: JSON.stringify({ player_id: playerId, team }),
+      });
+      await refresh();
+    } catch (error) { showError(error.message); }
+  }
+
   async function kickPlayer(playerId) {
     if (!confirm('この参加者をルームから退出させますか？')) return;
     try {
@@ -232,7 +259,7 @@
   $('join-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = $('player-name').value.trim();
-    const team = document.querySelector('input[name="team"]:checked')?.value;
+    const team = document.querySelector('input[name="team"]:checked')?.value || 'U';
     try {
       const data = await api(`/api/rooms/${code}/join`, {
         method: 'POST',
@@ -240,6 +267,7 @@
       });
       localStorage.setItem(playerKey, data.player_token);
       selected = [];
+      selectionDirty = false;
       await refresh();
     } catch (error) { showError(error.message); }
   });
@@ -251,6 +279,7 @@
     }
     try {
       await api(`/api/rooms/${code}/vote`, { method: 'POST', body: JSON.stringify({ choices: selected }) });
+      selectionDirty = false;
       await refresh();
     } catch (error) { $('vote-message').textContent = error.message; }
   });
@@ -259,6 +288,7 @@
     if (!confirm('ヒーローを選ばず、今回はパスしますか？')) return;
     try {
       selected = [];
+      selectionDirty = false;
       await api(`/api/rooms/${code}/vote`, { method: 'POST', body: JSON.stringify({ choices: [] }) });
       await refresh();
     } catch (error) { $('vote-message').textContent = error.message; }
@@ -267,6 +297,7 @@
   $('edit-vote').addEventListener('click', async () => {
     try {
       await api(`/api/rooms/${code}/unready`, { method: 'POST', body: '{}' });
+      selectionDirty = false;
       await refresh();
     } catch (error) { showError(error.message); }
   });
@@ -292,6 +323,7 @@
     try {
       await api(`/api/rooms/${code}/reset`, { method: 'POST', body: '{}' });
       selected = [];
+      selectionDirty = false;
       await refresh();
     } catch (error) { showError(error.message); }
   });
@@ -329,6 +361,7 @@
       const index = Number(slot.dataset.slot);
       if (selected[index]) {
         selected.splice(index, 1);
+        selectionDirty = true;
         renderChoices();
         renderHeroes();
       }
@@ -353,54 +386,23 @@
   });
 
   if (typeof io === 'function') {
-    const socket = io({
-      transports: ['websocket', 'polling'],
-      upgrade: true,
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 500,
-      reconnectionDelayMax: 3000,
-      timeout: 10000,
-    });
-
+    const socket = io();
     socket.on('connect', () => {
-      $('connection-message').textContent = 'リアルタイム接続中';
-      $('connection-message').classList.add('connected');
-      $('connection-message').hidden = false;
-      setTimeout(() => {
-        if (socket.connected) $('connection-message').hidden = true;
-      }, 1200);
+      $('connection-message').hidden = true;
       socket.emit('join_room', { room_code: code });
-      refresh();
     });
-
-    socket.on('connect_error', () => {
-      $('connection-message').classList.remove('connected');
-      $('connection-message').textContent = 'リアルタイム接続を再試行中です。画面は自動更新されます。';
-      $('connection-message').hidden = false;
-    });
-
     socket.on('disconnect', () => {
-      $('connection-message').classList.remove('connected');
-      $('connection-message').textContent = 'リアルタイム接続を再試行中です。画面は自動更新されます。';
+      $('connection-message').textContent = 'リアルタイム接続が切れました。自動で再接続します。';
       $('connection-message').hidden = false;
     });
-
     socket.on('room_updated', (payload) => {
-      if (payload.room_code !== code) return;
-      lastRealtimeEvent = Date.now();
-      refresh();
+      if (payload.room_code === code) refresh();
     });
+    setInterval(refresh, 1000);
+  } else {
+    // ライブラリ不要版では1秒ごとの更新で全端末へ反映します。
+    setInterval(refresh, 1000);
   }
-
-  // Render側でWebSocketが一時的に切れても、最大1秒ほどで全端末へ反映する保険。
-  setInterval(() => {
-    if (document.visibilityState === 'visible') refresh();
-  }, 1000);
-  window.addEventListener('focus', refresh);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refresh();
-  });
 
   refresh();
 })();

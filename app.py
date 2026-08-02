@@ -22,16 +22,6 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 init_db(DB_PATH)
 
 
-@app.after_request
-def disable_dynamic_cache(response):
-    """Always fetch the latest room state and JavaScript during beta updates."""
-    if request.path.startswith("/api/") or request.path.startswith("/room/") or request.path.endswith("room.js"):
-        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
-
-
 def error(message: str, status: int = 400):
     return jsonify({"ok": False, "error": message}), status
 
@@ -80,7 +70,7 @@ def require_player(code: str):
 
 
 def broadcast(code: str) -> None:
-    socketio.emit("room_updated", {"room_code": code, "event_id": secrets.token_hex(8)}, to=code)
+    socketio.emit("room_updated", {"room_code": code}, to=code)
 
 
 def load_votes(code: str, round_no: int) -> list[Vote]:
@@ -91,7 +81,7 @@ def load_votes(code: str, round_no: int) -> list[Vote]:
             FROM players p
             LEFT JOIN votes v
               ON v.player_id = p.id AND v.round_no = ?
-            WHERE p.room_code = ?
+            WHERE p.room_code = ? AND p.team IN ('A', 'B')
             ORDER BY p.id, v.rank_no
             """,
             (round_no, code),
@@ -130,7 +120,7 @@ def maybe_auto_reveal(code: str) -> None:
             ).fetchall()
         }
         ready_count = db.execute(
-            "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND ready = 1",
+            "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND team IN ('A', 'B') AND ready = 1",
             (code,),
         ).fetchone()["count"]
     if team_counts.get("A") == 5 and team_counts.get("B") == 5 and ready_count == 10:
@@ -168,8 +158,8 @@ def join(code: str):
     team = str(body.get("team", "")).upper()
     if not name or len(name) > 24:
         return error("名前は1〜24文字で入力してください。")
-    if team not in {"A", "B"}:
-        return error("チームを選択してください。")
+    if team not in {"U", "A", "B"}:
+        return error("所属先を選択してください。")
 
     with connect(DB_PATH) as db:
         room = db.execute("SELECT * FROM rooms WHERE code = ?", (code,)).fetchone()
@@ -183,12 +173,13 @@ def join(code: str):
         ).fetchone()
         if duplicate:
             return error("同じ名前の参加者がいます。別の名前にしてください。")
-        count = db.execute(
-            "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND team = ?",
-            (code, team),
-        ).fetchone()["count"]
-        if count >= 5:
-            return error(f"TEAM {team} は満員です。")
+        if team in {"A", "B"}:
+            count = db.execute(
+                "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND team = ?",
+                (code, team),
+            ).fetchone()["count"]
+            if count >= 5:
+                return error(f"TEAM {team} は満員です。")
 
         player_id = str(uuid.uuid4())
         player_token = secrets.token_urlsafe(32)
@@ -211,7 +202,7 @@ def state(code: str):
         if room is None:
             return error("ルームが見つかりません。", 404)
         players = db.execute(
-            "SELECT id, name, team, ready FROM players WHERE room_code = ? ORDER BY team, created_at",
+            "SELECT id, name, team, ready FROM players WHERE room_code = ? ORDER BY CASE team WHEN 'U' THEN 0 WHEN 'A' THEN 1 ELSE 2 END, created_at",
             (code,),
         ).fetchall()
         me = None
@@ -272,6 +263,8 @@ def submit_vote(code: str):
         return error("ルームが見つかりません。", 404)
     if room["status"] != "voting":
         return error("結果公開後は投票を変更できません。")
+    if player["team"] not in {"A", "B"}:
+        return error("未所属の間は投票できません。TEAM AまたはTEAM Bへ移動してください。")
 
     try:
         choices = validate_choices(json_body().get("choices", []))
@@ -323,7 +316,7 @@ def reveal(code: str):
         return response
     with connect(DB_PATH) as db:
         ready_count = db.execute(
-            "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND ready = 1",
+            "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND team IN ('A', 'B') AND ready = 1",
             (code,),
         ).fetchone()["count"]
     if ready_count == 0:
@@ -368,6 +361,38 @@ def reset(code: str):
     return jsonify({"ok": True})
 
 
+@app.post("/api/rooms/<code>/move")
+def move_player(code: str):
+    code = code.upper()
+    _, response = require_host(code)
+    if response:
+        return response
+    body = json_body()
+    player_id = str(body.get("player_id", ""))
+    team = str(body.get("team", "")).upper()
+    if team not in {"U", "A", "B"}:
+        return error("移動先が正しくありません。")
+
+    with connect(DB_PATH) as db:
+        player = db.execute(
+            "SELECT id, team FROM players WHERE id = ? AND room_code = ?",
+            (player_id, code),
+        ).fetchone()
+        if player is None:
+            return error("参加者が見つかりません。", 404)
+        if team in {"A", "B"}:
+            count = db.execute(
+                "SELECT COUNT(*) AS count FROM players WHERE room_code = ? AND team = ? AND id <> ?",
+                (code, team, player_id),
+            ).fetchone()["count"]
+            if count >= 5:
+                return error(f"TEAM {team} は満員です。")
+        db.execute("DELETE FROM votes WHERE player_id = ?", (player_id,))
+        db.execute("UPDATE players SET team = ?, ready = 0 WHERE id = ?", (team, player_id))
+    broadcast(code)
+    return jsonify({"ok": True})
+
+
 @app.post("/api/rooms/<code>/leave")
 def leave(code: str):
     code = code.upper()
@@ -404,7 +429,6 @@ def socket_join(data):
     if code:
         join_room(code)
         emit("joined_room", {"room_code": code})
-        emit("room_updated", {"room_code": code, "event_id": secrets.token_hex(8)})
 
 
 if __name__ == "__main__":
