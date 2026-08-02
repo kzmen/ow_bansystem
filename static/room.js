@@ -10,6 +10,9 @@
   let activeRole = 'All';
   let searchText = '';
   let settingsTimer = null;
+  let refreshPromise = null;
+  let refreshQueued = false;
+  let lastRealtimeEvent = 0;
 
   const $ = (id) => document.getElementById(id);
   const globalError = $('global-error');
@@ -44,16 +47,30 @@
   }
 
   async function refresh() {
-    try {
-      const data = await api(`/api/rooms/${code}/state`);
-      state = data;
-      clearError();
-      if (data.me && data.my_choices.length && !data.me.ready) selected = [...data.my_choices];
-      if (data.me && data.me.ready) selected = [...data.my_choices];
-      render();
-    } catch (error) {
-      showError(error.message);
+    if (refreshPromise) {
+      refreshQueued = true;
+      return refreshPromise;
     }
+
+    refreshPromise = (async () => {
+      try {
+        const data = await api(`/api/rooms/${code}/state?_=${Date.now()}`);
+        state = data;
+        clearError();
+        if (data.me) selected = [...data.my_choices];
+        render();
+      } catch (error) {
+        showError(error.message);
+      } finally {
+        refreshPromise = null;
+        if (refreshQueued) {
+          refreshQueued = false;
+          refresh();
+        }
+      }
+    })();
+
+    return refreshPromise;
   }
 
   function render() {
@@ -336,23 +353,54 @@
   });
 
   if (typeof io === 'function') {
-    const socket = io();
-    socket.on('connect', () => {
-      $('connection-message').hidden = true;
-      socket.emit('join_room', { room_code: code });
+    const socket = io({
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 3000,
+      timeout: 10000,
     });
-    socket.on('disconnect', () => {
-      $('connection-message').textContent = 'リアルタイム接続が切れました。自動で再接続します。';
+
+    socket.on('connect', () => {
+      $('connection-message').textContent = 'リアルタイム接続中';
+      $('connection-message').classList.add('connected');
+      $('connection-message').hidden = false;
+      setTimeout(() => {
+        if (socket.connected) $('connection-message').hidden = true;
+      }, 1200);
+      socket.emit('join_room', { room_code: code });
+      refresh();
+    });
+
+    socket.on('connect_error', () => {
+      $('connection-message').classList.remove('connected');
+      $('connection-message').textContent = 'リアルタイム接続を再試行中です。画面は自動更新されます。';
       $('connection-message').hidden = false;
     });
-    socket.on('room_updated', (payload) => {
-      if (payload.room_code === code) refresh();
+
+    socket.on('disconnect', () => {
+      $('connection-message').classList.remove('connected');
+      $('connection-message').textContent = 'リアルタイム接続を再試行中です。画面は自動更新されます。';
+      $('connection-message').hidden = false;
     });
-    setInterval(refresh, 5000);
-  } else {
-    // ライブラリ不要版では1秒ごとの更新で全端末へ反映します。
-    setInterval(refresh, 1000);
+
+    socket.on('room_updated', (payload) => {
+      if (payload.room_code !== code) return;
+      lastRealtimeEvent = Date.now();
+      refresh();
+    });
   }
+
+  // Render側でWebSocketが一時的に切れても、最大1秒ほどで全端末へ反映する保険。
+  setInterval(() => {
+    if (document.visibilityState === 'visible') refresh();
+  }, 1000);
+  window.addEventListener('focus', refresh);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refresh();
+  });
 
   refresh();
 })();

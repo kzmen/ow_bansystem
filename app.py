@@ -22,6 +22,16 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 init_db(DB_PATH)
 
 
+@app.after_request
+def disable_dynamic_cache(response):
+    """Always fetch the latest room state and JavaScript during beta updates."""
+    if request.path.startswith("/api/") or request.path.startswith("/room/") or request.path.endswith("room.js"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 def error(message: str, status: int = 400):
     return jsonify({"ok": False, "error": message}), status
 
@@ -70,7 +80,7 @@ def require_player(code: str):
 
 
 def broadcast(code: str) -> None:
-    socketio.emit("room_updated", {"room_code": code}, to=code)
+    socketio.emit("room_updated", {"room_code": code, "event_id": secrets.token_hex(8)}, to=code)
 
 
 def load_votes(code: str, round_no: int) -> list[Vote]:
@@ -394,6 +404,7 @@ def socket_join(data):
     if code:
         join_room(code)
         emit("joined_room", {"room_code": code})
+        emit("room_updated", {"room_code": code, "event_id": secrets.token_hex(8)})
 
 
 if __name__ == "__main__":

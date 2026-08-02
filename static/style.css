@@ -225,3 +225,9 @@ form { display: grid; gap: 14px; }
   .vote-header { flex-direction: column; }
   .rule-strip div { min-width: 0; flex: 1; }
 }
+
+/* Realtime connection status */
+#connection-message.connected {
+  border-color: rgba(69, 210, 132, 0.55);
+  color: #9ff0bf;
+}
