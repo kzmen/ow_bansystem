@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+ow_ban.db
+.pytest_cache/
+.env

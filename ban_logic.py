@@ -25,6 +25,7 @@ POINTS_BY_RANK: tuple[int, int, int] = (7, 5, 3)
 HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
     "Tank": (
         "D.Va",
+        "D.Mon",
         "Domina",
         "Doomfist",
         "Hazard",
@@ -57,7 +58,6 @@ HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
         "Sierra",
         "Sojourn",
         "Soldier: 76",
-        "Sombra",
         "Symmetra",
         "Torbjörn",
         "Tracer",
@@ -69,6 +69,7 @@ HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
         "Ana",
         "Baptiste",
         "Brigitte",
+        "Doctrine",
         "Illari",
         "Jetpack Cat",
         "Juno",
@@ -78,6 +79,7 @@ HEROES_BY_ROLE: dict[str, tuple[str, ...]] = {
         "Mercy",
         "Mizuki",
         "Moira",
+        "Sombra",
         "Wuyang",
         "Zenyatta",
     ),
